@@ -1,0 +1,10 @@
+.DS_Store
+bin
+lib
+share
+include
+lib64
+pip-selfcheck.json
+**/*.cfg
+**/*.swp
+**/*.pyc
