@@ -7,7 +7,7 @@ import threading
 import queue
 from collections import namedtuple
 from database import Database
-
+import itertools
 JARCHIVE_BASE_URL = "http://j-archive.com"
 CLUE_ANSWER_REGEX = re.compile(r'''<em class="correct_response">(.+)</em>''')
 MAX_THREADS = 8
@@ -40,18 +40,21 @@ class ScraperWorker(threading.Thread):
     def run(self):
         while True:
             game_url = self.queue.get()
-            print('Scraping game at {}'.format(game_url))
-            game_page_soup = get_page_soup(game_url)  # TODO: returns None is err.
-            if not game_page_soup:  # Problem getting page.
-                self.done()
-            jeopardy_rounds = get_jeopardy_rounds(game_page_soup)
-            for jeopardy_round in jeopardy_rounds:
-                try:
-                    serialized_round = serialize_jeopardy_round(jeopardy_round)
-                    self.save(serialized_round)
-                except MalformedRoundHTMLError:
-                    continue
+            self.scrape_jarchive_page(game_url)
+
+    def scrape_jarchive_page(self, url):
+        print('Scraping game at {}'.format(url))
+        game_page_soup = get_page_soup(url)
+        if not game_page_soup:
             self.done()
+        jeopardy_rounds = get_jeopardy_rounds(game_page_soup)
+        for jeopardy_round in jeopardy_rounds:
+            try:
+                serialized_round = serialize_jeopardy_round(jeopardy_round)
+                self.save(serialized_round)
+            except MalformedRoundHTMLError:
+                continue
+        self.done()
 
     def save(self, game_category_dict):  # Dict of {title:'', clues: [(v,q,a),...]}
         self.database.save(game_category_dict)
@@ -121,7 +124,6 @@ def parse_clue_question(clue_node):
     question_node = clue_node.find("td", class_="clue_text")
     if question_node is None:
         return None
-    # question = next(question_node.strings)
     question = remove_html_tags(question_node.text)
     return question
 
@@ -132,6 +134,7 @@ def parse_clue_answer(clue_node):
         answer = CLUE_ANSWER_REGEX.search(answer_node['onmouseover']).group(1)
     except AttributeError:  # Could not parse answer
         return None
+    answer = remove_html_tags(answer)
     return answer
 
 
@@ -203,5 +206,6 @@ def start_scraper(season_number):
         q.join()
         season_number -= 1
     return
+
 if __name__ == "__main__":
-    start_scraper(33)
+    pass
