@@ -6,8 +6,8 @@ import requests
 import threading
 import queue
 from collections import namedtuple
-from database import Database
-import itertools
+from .database import Database
+
 JARCHIVE_BASE_URL = "http://j-archive.com"
 CLUE_ANSWER_REGEX = re.compile(r'''<em class="correct_response">(.+)</em>''')
 MAX_THREADS = 8
@@ -29,6 +29,42 @@ class IncompleteClueError(Exception):
     Many game clues on JArchive, especially for very recent games, are incomplete.
     """
     pass
+
+
+class JArchiveScraper:
+    def __init__(self, database):
+        self.database = database
+        self.url_queue = queue.Queue()
+        self.workers = []
+
+    def init_workers(self):
+        for i in range(MAX_THREADS):
+            w = ScraperWorker(self.url_queue, self.database)
+            w.daemon = True
+            w.start()
+            self.workers.append(w)
+
+    def start(self, season=None):
+        self.init_workers()
+        if season is None:
+            season = get_current_season_number()
+            print("Starting at current season: {}".format(season))
+        while season > 0:  # TODO: threading.Event for worker communication.
+            print('Scraping season {}'.format(season))
+            game_urls = get_season_game_urls(season)
+            for url in game_urls:
+                self.url_queue.put(url)
+            self.url_queue.join()
+            season -= 1
+        self.finished()
+        return
+
+    def finished(self):
+        print("Finished scraping JArchive")
+        return
+    
+    def onerror(self):
+        pass
 
 
 class ScraperWorker(threading.Thread):
@@ -187,25 +223,6 @@ def serialize_jeopardy_round(round_soup):
     return round_dict
 
 
-def init_workers(url_queue, database):
-    for i in range(MAX_THREADS):
-        worker = ScraperWorker(url_queue, database)
-        worker.daemon = True
-        worker.start()
-
-def start_scraper(season_number):
-    db = Database()
-    q = queue.Queue()
-    workers = init_workers(q, db)
-    db.init_connection()
-    while season_number > 32:
-        print('Scraping season {}'.format(season_number))
-        game_urls = get_season_game_urls(season_number)
-        for url in game_urls:
-            q.put(url)
-        q.join()
-        season_number -= 1
-    return
 
 if __name__ == "__main__":
     pass
