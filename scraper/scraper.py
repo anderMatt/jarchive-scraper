@@ -34,16 +34,18 @@ class IncompleteClueError(Exception):
 
 class ScraperWorker(threading.Thread):
     def __init__(self, url_queue, database):  # TODO: pass third param: threading.Event() for graceful termination.
+        threading.Thread.__init__(self)
         self.queue = url_queue
         self.database = database
 
     def run(self):
         while True:
             game_url = self.queue.get()
+            print('Scraping game at {}'.format(game_url))
             game_page_soup = get_page_soup(game_url)  # TODO: returns None is err.
             if not game_page_soup:  # Problem getting page.
                 self.queue.task_done()
-            jeopardy_rounds = get_game_rounds(game_page_soup)
+            jeopardy_rounds = get_jeopardy_rounds(game_page_soup)
             for jeopardy_round in jeopardy_rounds:
                 serialized_round = serialize_jeopardy_round(jeopardy_round)
                 self.save(serialized_round)
@@ -139,6 +141,16 @@ def serialize_clue_node(clue_node):
         raise IncompleteClueError
     return Clue(question, answer)
 
+def serialize_valid_clue_nodes(clue_nodes):
+    serialized_clues = []
+    for node in clue_nodes:
+        try:
+            clue = serialize_clue_node(node) 
+            serialized_clues.append(clue)
+        except IncompleteClueError:
+            continue
+    return serialized_clues
+
 
 def serialize_jeopardy_round(round_soup):
     """
@@ -154,14 +166,11 @@ def serialize_jeopardy_round(round_soup):
     category_titles = get_round_categories(round_soup)
     round_clue_nodes = get_round_clue_nodes(round_soup) 
     if not (len(category_titles) == 6 and len(round_clue_nodes) == 30):
-        raise MalformedBoardHTMLError
+        raise MalformedRoundHTMLError
     for (category_index, category_title) in enumerate(category_titles):
-        category_clue_nodes = [round_clue_nodes[i] for i in range(0,30,category_index)]
-        try:
-            serialized_category_clues = map(lambda c: serialize_clue_node(c), category_clue_nodes)
-        except IncompleteClueError:
-            continue  # Category contains as incomplete clue; move on to next category.
-        rount_dict[category_title] = list(serialized_category_clues)
+        category_clue_nodes = [round_clue_nodes[i] for i in range(category_index,30,6)]
+        serialized_category_clues = serialize_valid_clue_nodes(category_clue_nodes)
+        round_dict[category_title] = list(serialized_category_clues)
     return round_dict
 
 
@@ -172,17 +181,17 @@ def init_workers(url_queue, database):
         worker.start()
 
 def start_scraper(season_number):
-    pass
-    # db = DB()
-    # q = Queue()
-    # workers = init_workers(db, q)
-    # while season_number > 0:
-    #     game_urls = get_season_game_urls(season_number)
-    #     for url in game_urls:
-    #         queue.put(url)
-    #     queue.join()
-    #     season_number -= 1
-    # HANDLE FINISH
-
+    db = Database()
+    q = queue.Queue()
+    workers = init_workers(q, db)
+    db.init_connection()
+    while season_number > 32:
+        print('Scraping season {}'.format(season_number))
+        game_urls = get_season_game_urls(season_number)
+        for url in game_urls:
+            q.put(url)
+        q.join()
+        season_number -= 1
+    return
 if __name__ == "__main__":
-    get_current_season_number()
+    start_scraper(33)
