@@ -17,11 +17,11 @@ class Database:
         self.collection_name = collection_name
 
     def init_connection(self):
-        self.client = pymongo.MongoClient(host=self.host, port=self.port)
+        self.client = pymongo.MongoClient(host=self.host, port=self.port, serverSelectionTimeoutMS=5)
         try:
             self.client.server_info()  # Check conn was successful. Polls for <serverSelectionTimeoutMS passed to client constructor, default=30s>
         except pymongo.errors.ServerSelectionTimeoutError as e:
-            raise DatabaseConnectionError("Unable to access MongoDB server at {}:{}. Please ensure a mongod instance is running.".format(self.host, self.port)) from e
+            raise DatabaseConnectionError("Timed out trying to connect to Mongo server at {}:{}. Please ensure an instance of mongod is running".format(self.host, self.port)) from e
 
 
     def save(self, categories_dict):
