@@ -6,7 +6,9 @@ import requests
 import threading
 from collections import namedtuple
 
+JARCHIVE_BASE_URL = "http://j-archive.com"
 CLUE_ANSWER_REGEX = re.compile(r'''<em class="correct_response">(.+)</em>''')
+MAX_THREADS = 8
 
 Clue = namedtuple('Clue', ['value', 'question', 'answer'])
 
@@ -26,6 +28,25 @@ class IncompleteClueError(Exception):
     """
     pass
 
+class ScraperWorker(threading.Thread):
+    def __init__(self, url_queue, database):  # TODO: pass third param: threading.Event() for graceful termination.
+        self.queue = url_queue
+        self.database = database
+
+    def run(self):
+        while True:
+            game_url = self.queue.get()
+            game_page_soup = get_page_soup(game_url)  # TODO: returns None is err.
+            if not game_page_soup:  # Problem getting page.
+                self.queue.task_done()
+            jeopardy_rounds = get_game_rounds(game_page_soup)
+            for jeopardy_round in jeopardy_rounds:
+                serialized_round = serialize_jeopardy_round(jeopardy_round)
+                    self.save(serialized_round)
+            self.queue.task_done()
+
+    def save(self, game_category_dict):  # Dict of {title:'', clues: [(v,q,a),...]}
+        self.database.save(game_category_dict)
 
 def get_page_soup(url):
     """Returns bs4.BeautifulSoup object of page at url."""
@@ -38,6 +59,27 @@ def get_page_soup(url):
         return
     page_soup = bs4.BeautifulSoup(req.text, "html.parser")
     return page_soup
+
+
+def get_current_season_number():
+    """Return season number of the current season."""
+    homepage_soup = get_page_soup(JARCHIVE_BASE_URL)
+    try:
+        current_season_href = homepage_soup.find("table", class_="fullpageheight").find("a")["href"]  # First href of homepage's content links to the current season.
+        season_number = re.search(r'''showseason.php\?season=(\d{1,2})''', current_season_href).group(1)
+    except (AttributeError, KeyError) as err:  # An href was not found, or it did not link to the season page.
+        print("Error getting current season number from the JArchive homepage: {}".format(err))
+        return
+    return season_number
+
+
+def get_season_game_urls(season):
+    """Returns list of urls for every game of the given season"""
+    season_url = "{}/showseason.php?season={}".format(JARCHIVE_BASE_URL, season)
+    season_page_soup = get_page_soup(season_url)
+    game_hrefs = [td.find('a') for td in season_page_soup.find_all("td", {"align":"left", "valign":"top", "style":"width:140px"})]
+    game_urls = [a["href"] for a in game_hrefs]
+    return
 
 
 def get_jeopardy_rounds(page_soup):
@@ -95,7 +137,7 @@ def serialize_clue_node(clue_node):
     answer = parse_clue_answer(clue_node)
     if not answer:
         raise IncompleteClueError
-    return {"value": value, "question": question, "answer": answer}
+    return Clue(value, question, answer)
 
 
 def serialize_jeopardy_round(round_soup):
@@ -118,10 +160,29 @@ def serialize_jeopardy_round(round_soup):
         try:
             serialized_category_clues = map(lambda c: serialize_clue_node(c), category_clue_nodes)
         except IncompleteClueError:
-            return
+            continue  # Category contains as incomplete clue; move on to next category.
+        rount_dict[category_title] = list(serialized_category_clues)
+    return round_dict
 
-    return
 
+def init_workers(url_queue, database):
+    for i in range(MAX_THREADS):
+        worker = ScraperWorker(url_queue, database)
+        worker.daemon = True
+        worker.start()
+
+def start_scraper(season_number):
+    pass
+    # db = DB()
+    # q = Queue()
+    # workers = init_workers(db, q)
+    # while season_number > 0:
+    #     game_urls = get_season_game_urls(season_number)
+    #     for url in game_urls:
+    #         queue.put(url)
+    #     queue.join()
+    #     season_number -= 1
+    # HANDLE FINISH
 
 if __name__ == "__main__":
-    pass
+    get_current_season_number()
