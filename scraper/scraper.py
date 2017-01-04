@@ -4,13 +4,15 @@ import queue
 import re
 import requests
 import threading
+import queue
 from collections import namedtuple
+from database import Database
 
 JARCHIVE_BASE_URL = "http://j-archive.com"
 CLUE_ANSWER_REGEX = re.compile(r'''<em class="correct_response">(.+)</em>''')
 MAX_THREADS = 8
 
-Clue = namedtuple('Clue', ['value', 'question', 'answer'])
+Clue = namedtuple('Clue', ['question', 'answer'])
 
 class MalformedRoundHTMLError(Exception):
     """Raise when the HTML of a JArchive round is not properly formatted.
@@ -21,12 +23,14 @@ class MalformedRoundHTMLError(Exception):
     """
     pass
 
+
 class IncompleteClueError(Exception):
-    """Raise when a (value AND question AND answer) cannot be parsed from a clue node.
+    """Raise when a question AND and answer cannot be parsed from a clue node.
 
     Many game clues on JArchive, especially for very recent games, are incomplete.
     """
     pass
+
 
 class ScraperWorker(threading.Thread):
     def __init__(self, url_queue, database):  # TODO: pass third param: threading.Event() for graceful termination.
@@ -42,11 +46,12 @@ class ScraperWorker(threading.Thread):
             jeopardy_rounds = get_game_rounds(game_page_soup)
             for jeopardy_round in jeopardy_rounds:
                 serialized_round = serialize_jeopardy_round(jeopardy_round)
-                    self.save(serialized_round)
+                self.save(serialized_round)
             self.queue.task_done()
 
     def save(self, game_category_dict):  # Dict of {title:'', clues: [(v,q,a),...]}
         self.database.save(game_category_dict)
+
 
 def get_page_soup(url):
     """Returns bs4.BeautifulSoup object of page at url."""
@@ -56,18 +61,18 @@ def get_page_soup(url):
         req.raise_for_status()
     except requests.exceptions.RequestException as err:
         print('Error getting page soup for <{}>: {}'.format(url, err))
-        return
+        return  # TODO: raise?
     page_soup = bs4.BeautifulSoup(req.text, "html.parser")
     return page_soup
 
 
 def get_current_season_number():
     """Return season number of the current season."""
-    homepage_soup = get_page_soup(JARCHIVE_BASE_URL)
+    homepage_soup = get_page_soup(JARCHIVE_BASE_URL)  # TODO: unable to get homepage.
     try:
         current_season_href = homepage_soup.find("table", class_="fullpageheight").find("a")["href"]  # First href of homepage's content links to the current season.
         season_number = re.search(r'''showseason.php\?season=(\d{1,2})''', current_season_href).group(1)
-    except (AttributeError, KeyError) as err:  # An href was not found, or it did not link to the season page.
+    except (AttributeError, KeyError) as err:  # An href was not found, or it did not link to a season page.
         print("Error getting current season number from the JArchive homepage: {}".format(err))
         return
     return season_number
@@ -79,7 +84,7 @@ def get_season_game_urls(season):
     season_page_soup = get_page_soup(season_url)
     game_hrefs = [td.find('a') for td in season_page_soup.find_all("td", {"align":"left", "valign":"top", "style":"width:140px"})]
     game_urls = [a["href"] for a in game_hrefs]
-    return
+    return game_urls
 
 
 def get_jeopardy_rounds(page_soup):
@@ -89,7 +94,7 @@ def get_jeopardy_rounds(page_soup):
 def get_round_categories(round_soup):
     """Returns a list of the round's categories.
 
-    The list must contain six elements, or else clues will be associated with the wrong category in <FUNCNAME>. 'Padding' the list with None
+    The list must contain six elements, or else clues will be associated with the wrong category in serialize_jeopardy_round(). 'Padding' the list with None
     when a title string is missing for a category ensures len=6.
     """
 
@@ -97,17 +102,9 @@ def get_round_categories(round_soup):
     category_titles = [c.text for c in category_title_nodes or None]
     return category_titles
 
+
 def get_round_clue_nodes(round_soup):
     return round_soup.find_all("td", class_="clue")
-
-def parse_clue_value(clue_node):
-    value_node = clue_node.find("td", class_="clue_value") or clue_node.find("td", class_="clue_value_daily_double")
-    if value_node is None:
-        return None
-    value = value_node.text.strip('$')
-    if value.startswith('D'):
-        value = "daily_double"
-    return value
 
 
 def parse_clue_question(clue_node):
@@ -128,23 +125,26 @@ def parse_clue_answer(clue_node):
 
 
 def serialize_clue_node(clue_node):
-    value = parse_clue_value(clue_node)
-    if not value:
-        raise IncompleteClueError
+    """Returns Clue namedtuple of question and answer parsed from clue node HTML.
+    
+        Raises:
+            IncompleteClueError is a question and/or answer is missing.
+    """
+
     question = parse_clue_question(clue_node)
     if not question:
         raise IncompleteClueError
     answer = parse_clue_answer(clue_node)
     if not answer:
         raise IncompleteClueError
-    return Clue(value, question, answer)
+    return Clue(question, answer)
 
 
 def serialize_jeopardy_round(round_soup):
     """
     Returns:
         A list of dictionaries that each represent a category of the given round. Each dictionary has the interface
-        {'title': category_title_string, 'clues': list_of_serialized_clues}
+        {'title': category_title_string, 'clues': list_of_serialized_clues}.
     
     Raises:
         MalformedRoundHTMLError: If Beautiful Soup cannot parse 6 category nodes and/or 30 clue nodes from round_soup.
