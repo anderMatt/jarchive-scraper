@@ -43,16 +43,25 @@ class ScraperWorker(threading.Thread):
             print('Scraping game at {}'.format(game_url))
             game_page_soup = get_page_soup(game_url)  # TODO: returns None is err.
             if not game_page_soup:  # Problem getting page.
-                self.queue.task_done()
+                self.done()
             jeopardy_rounds = get_jeopardy_rounds(game_page_soup)
             for jeopardy_round in jeopardy_rounds:
-                serialized_round = serialize_jeopardy_round(jeopardy_round)
-                self.save(serialized_round)
-            self.queue.task_done()
+                try:
+                    serialized_round = serialize_jeopardy_round(jeopardy_round)
+                    self.save(serialized_round)
+                except MalformedRoundHTMLError:
+                    continue
+            self.done()
 
     def save(self, game_category_dict):  # Dict of {title:'', clues: [(v,q,a),...]}
         self.database.save(game_category_dict)
 
+    def done(self):
+        self.queue.task_done()
+
+
+def remove_html_tags(string):
+    return re.sub(r'''(<.*?>|\\)''', '', string)
 
 def get_page_soup(url):
     """Returns bs4.BeautifulSoup object of page at url."""
@@ -112,7 +121,8 @@ def parse_clue_question(clue_node):
     question_node = clue_node.find("td", class_="clue_text")
     if question_node is None:
         return None
-    question = next(question_node.strings)
+    # question = next(question_node.strings)
+    question = remove_html_tags(question_node.text)
     return question
 
 
