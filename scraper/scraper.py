@@ -12,7 +12,6 @@ JARCHIVE_BASE_URL = "http://j-archive.com"
 CLUE_ANSWER_REGEX = re.compile(r'''<em class="correct_response">(.+)</em>''')
 MAX_THREADS = 8
 
-Clue = namedtuple('Clue', ['question', 'answer'])
 
 class MalformedRoundHTMLError(Exception):
     """Raise when the HTML of a JArchive round is not properly formatted.
@@ -113,7 +112,7 @@ def parse_clue_question(clue_node):
     question_node = clue_node.find("td", class_="clue_text")
     if question_node is None:
         return None
-    question = question_node.text
+    question = next(question_node.strings)
     return question
 
 
@@ -127,7 +126,7 @@ def parse_clue_answer(clue_node):
 
 
 def serialize_clue_node(clue_node):
-    """Returns Clue namedtuple of question and answer parsed from clue node HTML.
+    """Returns dict of clue question and answer parsed from clue_node.
     
         Raises:
             IncompleteClueError is a question and/or answer is missing.
@@ -139,7 +138,8 @@ def serialize_clue_node(clue_node):
     answer = parse_clue_answer(clue_node)
     if not answer:
         raise IncompleteClueError
-    return Clue(question, answer)
+    # return Clue(question, answer)
+    return {"question": question, "answer": answer}
 
 def serialize_valid_clue_nodes(clue_nodes):
     serialized_clues = []
