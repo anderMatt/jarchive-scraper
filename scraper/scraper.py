@@ -6,30 +6,12 @@ import requests
 import threading
 import queue
 from collections import namedtuple
-from .database import Database
+from .exceptions import MalformedRoundHTMLError, IncompleteClueError
+
 
 JARCHIVE_BASE_URL = "http://j-archive.com"
 CLUE_ANSWER_REGEX = re.compile(r'''<em class="correct_response">(.+)</em>''')
 MAX_THREADS = 8
-
-
-class MalformedRoundHTMLError(Exception):
-    """Raise when the HTML of a JArchive round is not properly formatted.
-
-    The HTML of each jeopardy round should contain 6 category nodes and 30 clue nodes. The HTML of some gamerounds
-    contains mismatched tags, usually involving nested <a> and <i> tags in the question text of a clue. Beautiful Soup
-    cannot properly parse this invalid HTML, so the scraper is unable to serialize the round.
-    """
-    pass
-
-
-class IncompleteClueError(Exception):
-    """Raise when a question AND and answer cannot be parsed from a clue node.
-
-    Many game clues on JArchive, especially for very recent games, are incomplete.
-    """
-    pass
-
 
 class JArchiveScraper:
     def __init__(self, database):
@@ -45,10 +27,11 @@ class JArchiveScraper:
             self.workers.append(w)
 
     def start(self, season=None):
-        self.init_workers()
         if season is None:
-            season = get_current_season_number()
+            season = get_current_season_number()  # TODO: unable.
             print("Starting at current season: {}".format(season))
+        self.init_workers()
+        season = int(season)
         while season > 0:  # TODO: threading.Event for worker communication.
             print('Scraping season {}'.format(season))
             game_urls = get_season_game_urls(season)
