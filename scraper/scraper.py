@@ -7,10 +7,10 @@ import threading
 import queue
 from collections import namedtuple
 from .exceptions import MalformedRoundHTMLError, IncompleteClueError
+from .parser import parse_jarchive_page
 
 
 JARCHIVE_BASE_URL = "http://j-archive.com"
-CLUE_ANSWER_REGEX = re.compile(r'''<em class="correct_response">(.+)</em>''')
 MAX_THREADS = 8
 
 class JArchiveScraper:
@@ -66,13 +66,8 @@ class ScraperWorker(threading.Thread):
         game_page_soup = get_page_soup(url)
         if not game_page_soup:
             self.done()
-        jeopardy_rounds = get_jeopardy_rounds(game_page_soup)
-        for jeopardy_round in jeopardy_rounds:
-            try:
-                serialized_round = serialize_jeopardy_round(jeopardy_round)
-                self.save(serialized_round)
-            except MalformedRoundHTMLError:
-                continue
+        categories_and_clues = parse_jarchive_page(game_page_soup)  # Dict of ALL cat:clues on the page.
+        self.save(categories_and_clues)
         self.done()
 
     def save(self, game_category_dict):  # Dict of {title:'', clues: [(v,q,a),...]}
@@ -82,8 +77,7 @@ class ScraperWorker(threading.Thread):
         self.queue.task_done()
 
 
-def remove_html_tags(string):
-    return re.sub(r'''(<.*?>|\\)''', '', string)
+
 
 def get_page_soup(url):
     """Returns bs4.BeautifulSoup object of page at url."""
@@ -119,93 +113,4 @@ def get_season_game_urls(season):
     return game_urls
 
 
-def get_jeopardy_rounds(page_soup):
-    return page_soup.find_all("table", class_="round")
 
-
-def get_round_categories(round_soup):
-    """Returns a list of the round's categories.
-
-    The list must contain six elements, or else clues will be associated with the wrong category in serialize_jeopardy_round(). 'Padding' the list with None
-    when a title string is missing for a category ensures len=6.
-    """
-
-    category_title_nodes = round_soup.find_all("td", class_="category_name")
-    category_titles = [c.text for c in category_title_nodes or None]
-    return category_titles
-
-
-def get_round_clue_nodes(round_soup):
-    return round_soup.find_all("td", class_="clue")
-
-
-def parse_clue_question(clue_node):
-    question_node = clue_node.find("td", class_="clue_text")
-    if question_node is None:
-        return None
-    question = remove_html_tags(question_node.text)
-    return question
-
-
-def parse_clue_answer(clue_node):
-    answer_node = clue_node.find('div')
-    try:
-        answer = CLUE_ANSWER_REGEX.search(answer_node['onmouseover']).group(1)
-    except AttributeError:  # Could not parse answer
-        return None
-    answer = remove_html_tags(answer)
-    return answer
-
-
-def serialize_clue_node(clue_node):
-    """Returns dict of clue question and answer parsed from clue_node.
-    
-        Raises:
-            IncompleteClueError is a question and/or answer is missing.
-    """
-
-    question = parse_clue_question(clue_node)
-    if not question:
-        raise IncompleteClueError
-    answer = parse_clue_answer(clue_node)
-    if not answer:
-        raise IncompleteClueError
-    # return Clue(question, answer)
-    return {"question": question, "answer": answer}
-
-def serialize_valid_clue_nodes(clue_nodes):
-    serialized_clues = []
-    for node in clue_nodes:
-        try:
-            clue = serialize_clue_node(node) 
-            serialized_clues.append(clue)
-        except IncompleteClueError:
-            continue
-    return serialized_clues
-
-
-def serialize_jeopardy_round(round_soup):
-    """
-    Returns:
-        A list of dictionaries that each represent a category of the given round. Each dictionary has the interface
-        {'title': category_title_string, 'clues': list_of_serialized_clues}.
-    
-    Raises:
-        MalformedRoundHTMLError: If Beautiful Soup cannot parse 6 category nodes and/or 30 clue nodes from round_soup.
-    """
-
-    round_dict = {}
-    category_titles = get_round_categories(round_soup)
-    round_clue_nodes = get_round_clue_nodes(round_soup) 
-    if not (len(category_titles) == 6 and len(round_clue_nodes) == 30):
-        raise MalformedRoundHTMLError
-    for (category_index, category_title) in enumerate(category_titles):
-        category_clue_nodes = [round_clue_nodes[i] for i in range(category_index,30,6)]
-        serialized_category_clues = serialize_valid_clue_nodes(category_clue_nodes)
-        round_dict[category_title] = list(serialized_category_clues)
-    return round_dict
-
-
-
-if __name__ == "__main__":
-    pass
