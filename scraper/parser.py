@@ -1,12 +1,39 @@
-#!/usr/bin/env python3
-
 import re
 from .exceptions import MalformedRoundHTMLError, IncompleteClueError
 
+"""This module contains functions to parse clue answers and question from j-archive HTML.
+"""
+
+
 CLUE_ANSWER_REGEX = re.compile(r'''<em class="correct_response">(.+)</em>''')
+"""
+Clue answers on j-archive are not the string content of an HTML element (like questions are), but instead are part of a string that
+inline JavaScript writes to the document when a user hovers over a clue box. Regex is used to parse the answer from this string.
+Instead of recompiling the regex with every call to _parse_clue_answer, we initialize it here as a global variable.
+"""
 
 def _remove_html_tags(string):
     return re.sub(r'''(<.*?>|\\)''', '', string)
+
+
+def parse_jarchive_page(page_soup):
+    """
+    Public function scraper.ScraperWorkers objects use to parse clues after requesting a j-archive page and converting it
+    to a bs4.BeautifulSoup object.
+
+    Returns:
+        Dictionary serialization of all valid categories on the j-archive page. Keys are category titles, with values of a list of serialized clue dictionaries. Example: {"Famous People": ["question": "First president of the United States", "answer":"George Washington"...]}.
+    """
+
+    all_categories_and_clues = {}
+    jeopardy_rounds = _get_jeopardy_rounds(page_soup)
+    for j_round in jeopardy_rounds:
+        try:
+            round_categories_and_clues = _serialize_jeopardy_round(j_round)
+            all_categories_and_clues.update(round_categories_and_clues)
+        except MalformedRoundHTMLError:
+            continue
+    return all_categories_and_clues
 
 def _parse_clue_question(clue_node):
     question_node = clue_node.find("td", class_="clue_text")
@@ -30,7 +57,7 @@ def _serialize_clue_node(clue_node):
     """Returns dict of clue question and answer parsed from clue_node.
     
         Raises:
-            IncompleteClueError is a question and/or answer is missing.
+            IncompleteClueError is a question and/or answer cannot be parsed.
     """
 
     question = _parse_clue_question(clue_node)
@@ -65,10 +92,12 @@ def _get_round_clue_nodes(round_soup):
 def _serialize_jeopardy_round(round_soup):
     """
     Returns:
-        Dictionary with key,value pairs of {"category title": [clues]}.
+        Dictionary with key,value pairs of category names mapping to a list of clue dictionaries for every category of the
+        given round.
     
     Raises:
-        MalformedRoundHTMLError: If Beautiful Soup cannot parse 6 category nodes and/or 30 clue nodes from round_soup.
+        MalformedRoundHTMLError: If Beautiful Soup cannot parse 6 category nodes and/or 30 clue nodes from round_soup. This indicates
+        the HTML is not structured as the parsing functions expect.
     """
 
     categories_and_clues = {}
@@ -86,16 +115,5 @@ def _serialize_jeopardy_round(round_soup):
     return categories_and_clues
 
 
-def parse_jarchive_page(page_soup):
-    """Return dict with k,v pairs of {"<catname>":[{}clues]} for every category on the page."""
 
-    all_categories_and_clues = {}
-    jeopardy_rounds = _get_jeopardy_rounds(page_soup)
-    for jeopardy_round in jeopardy_rounds:
-        try:
-            round_categories_and_clues = _serialize_jeopardy_round(jeopardy_round)
-            all_categories_and_clues.update(round_categories_and_clues)
-        except MalformedRoundHTMLError:
-            continue
-    return all_categories_and_clues
 

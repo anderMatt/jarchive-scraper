@@ -14,6 +14,18 @@ JARCHIVE_BASE_URL = "http://j-archive.com"
 MAX_THREADS = 8
 
 class JArchiveScraper:
+    """
+    Provides entry point to configure and begin scraping the j-archive website.
+
+    Args:
+        database: Object responsible for saving the data scraped from j-archive. Should expose a 
+        'save' method that accepts a dictionary of category:[clues] parsed from the webpage.
+
+    Attributes:
+        url_queue (queue.Queue): Shared among worker threads and populated with j-archive page urls that
+            are queued to be scraped.
+        workers [ScraperWorker]: List of references to worker threads.
+    """
     def __init__(self, database):
         self.database = database
         self.url_queue = queue.Queue()
@@ -27,6 +39,10 @@ class JArchiveScraper:
             self.workers.append(w)
 
     def start(self, season=None):
+        """Entry point for scraping j-archive.
+        Args:
+            season: Season to start scraping games from. Defaults to the current season.
+        """
         if season is None:
             season = get_current_season_number()  # TODO: unable.
             print("Starting at current season: {}".format(season))
@@ -51,6 +67,10 @@ class JArchiveScraper:
 
 
 class ScraperWorker(threading.Thread):
+    """
+    Thread that requests a j-archive webpage, passes a bs4.BeautifulSoup object of the page to the parsing
+    functions, and passes the game data to the database interface for saving.
+    """
     def __init__(self, url_queue, database):  # TODO: pass third param: threading.Event() for graceful termination.
         threading.Thread.__init__(self)
         self.queue = url_queue
@@ -77,7 +97,7 @@ class ScraperWorker(threading.Thread):
         self.queue.task_done()
 
 
-
+### Helpers ###
 
 def get_page_soup(url):
     """Returns bs4.BeautifulSoup object of page at url."""
@@ -93,7 +113,8 @@ def get_page_soup(url):
 
 
 def get_current_season_number():
-    """Return season number of the current season."""
+    """Return season number of the current Jeopardy season on j-archive."""
+
     homepage_soup = get_page_soup(JARCHIVE_BASE_URL)  # TODO: unable to get homepage.
     try:
         current_season_href = homepage_soup.find("table", class_="fullpageheight").find("a")["href"]  # First href of homepage's content links to the current season.
@@ -105,7 +126,10 @@ def get_current_season_number():
 
 
 def get_season_game_urls(season):
-    """Returns list of urls for every game of the given season"""
+    """Returns list of urls for every game of the given season.
+    
+    For every season, j-archive maintains a season page with links to every game of that season.
+    """
     season_url = "{}/showseason.php?season={}".format(JARCHIVE_BASE_URL, season)
     season_page_soup = get_page_soup(season_url)
     game_hrefs = [td.find('a') for td in season_page_soup.find_all("td", {"align":"left", "valign":"top", "style":"width:140px"})]
