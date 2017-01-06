@@ -5,7 +5,7 @@ import re
 import requests
 import threading
 import queue
-from collections import namedtuple
+from functools import wraps
 from .exceptions import MalformedRoundHTMLError, IncompleteClueError
 from .parser import parse_jarchive_page
 
@@ -35,8 +35,8 @@ class JArchiveScraper:
         for i in range(MAX_THREADS):
             w = ScraperWorker(self.url_queue, self.database)
             w.daemon = True
-            w.start()
             self.workers.append(w)
+            w.start()
 
     def start(self, season=None):
         """Entry point for scraping j-archive.
@@ -48,22 +48,33 @@ class JArchiveScraper:
             print("Starting at current season: {}".format(season))
         self.init_workers()
         season = int(season)
-        while season > 0:  # TODO: threading.Event for worker communication.
-            print('Scraping season {}'.format(season))
-            game_urls = get_season_game_urls(season)
-            for url in game_urls:
-                self.url_queue.put(url)
-            self.url_queue.join()
-            season -= 1
-        self.finished()
-        return
+        self.mainloop(season)
 
     def finished(self):
         print("Finished scraping JArchive")
         return
     
-    def onerror(self):
+    def onerror(self):  # What type of args?
         pass
+    
+    def populate_url_queue(self, season):
+        """Populate url queue with game urls for given season."""
+        game_urls = get_season_game_urls(season)
+        if not game_urls:
+            print("Unable to get game urls for season {}".format(season))
+            self.onerror()
+        for url in game_urls:
+            self.url_queue.put(url)
+        return game_urls
+
+    def mainloop(self, starting_season):
+        print('mainloop started: {}'.format(starting_season))
+        curr_season = starting_season
+        while curr_season > 0:
+            self.populate_url_queue(curr_season)
+            self.url_queue.join()
+            curr_season -= 1
+        self.finished()
 
 
 class ScraperWorker(threading.Thread):
@@ -86,7 +97,11 @@ class ScraperWorker(threading.Thread):
         game_page_soup = get_page_soup(url)
         if not game_page_soup:
             self.done()
+            return
         categories_and_clues = parse_jarchive_page(game_page_soup)  # Dict of ALL cat:clues on the page.
+        if not categories_and_clues:
+            self.done()
+            return
         self.save(categories_and_clues)
         self.done()
 
@@ -95,6 +110,9 @@ class ScraperWorker(threading.Thread):
 
     def done(self):
         self.queue.task_done()
+
+    def on_page_request_error(self):
+        return
 
 
 ### Helpers ###
@@ -107,7 +125,8 @@ def get_page_soup(url):
         req.raise_for_status()
     except requests.exceptions.RequestException as err:
         print('Error getting page soup for <{}>: {}'.format(url, err))
-        return  # TODO: raise?
+        return None
+        # return  # TODO: raise?
     page_soup = bs4.BeautifulSoup(req.text, "html.parser")
     return page_soup
 
@@ -132,6 +151,8 @@ def get_season_game_urls(season):
     """
     season_url = "{}/showseason.php?season={}".format(JARCHIVE_BASE_URL, season)
     season_page_soup = get_page_soup(season_url)
+    if not season_page_soup:
+        print("Unable to get game urls for season {}".format(season))
     game_hrefs = [td.find('a') for td in season_page_soup.find_all("td", {"align":"left", "valign":"top", "style":"width:140px"})]
     game_urls = [a["href"] for a in game_hrefs]
     return game_urls
