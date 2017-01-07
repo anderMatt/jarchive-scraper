@@ -3,6 +3,7 @@ import bs4
 import queue
 import re
 import requests
+import sys
 import threading
 import queue
 from functools import wraps
@@ -59,13 +60,18 @@ class JArchiveScraper:
     
     def onerror(self):  # What type of args?
         pass
+
+    def on_url_queue_fail(self):
+        print("Scraper unable to find urls to any more games, exiting.")
+        self.exit(error = False)
+        return
     
     def populate_url_queue(self, season):
         """Populate url queue with game urls for given season."""
         game_urls = get_season_game_urls(season)
         if not game_urls:
             print("Unable to get game urls for season {}".format(season))
-            self.onerror()
+            self.on_url_queue_fail()
         for url in game_urls:
             self.url_queue.put(url)
         return game_urls
@@ -83,6 +89,13 @@ class JArchiveScraper:
             self.url_queue.join()
 
         self.finished()
+
+    def exit(self, error=False):
+        if error:
+            sys.exit(1)
+            #  TODO: stacktrace.
+        else:
+            sys.exit(0)
 
 
 class ScraperWorker(threading.Thread):
