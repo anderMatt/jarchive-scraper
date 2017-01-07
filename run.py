@@ -15,7 +15,7 @@ def arg_positive_int(value):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--season", type=arg_positive_int, nargs="?", help="season to begin scraper. Defaults to the current season.")
+    parser.add_argument("--season", type=arg_positive_int, nargs="?", help="Scrape a single season of games on j-archive.")
     args = parser.parse_args()
 
     database = Database()

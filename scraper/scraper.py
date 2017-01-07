@@ -44,11 +44,14 @@ class JArchiveScraper:
             season: Season to start scraping games from. Defaults to the current season.
         """
         if season is None:
+            get_all_seasons = True
             season = get_current_season_number()  # TODO: unable.
-            print("Starting at current season: {}".format(season))
+            print("Scraping all seasons, starting at current season: {}".format(season))
+        else:
+            get_all_seasons = False
         self.init_workers()
         season = int(season)
-        self.mainloop(season)
+        self.mainloop(season, get_all_seasons = get_all_seasons)
 
     def finished(self):
         print("Finished scraping JArchive")
@@ -67,13 +70,18 @@ class JArchiveScraper:
             self.url_queue.put(url)
         return game_urls
 
-    def mainloop(self, starting_season):
-        print('mainloop started: {}'.format(starting_season))
+    def mainloop(self, starting_season, get_all_seasons):
         curr_season = starting_season
-        while curr_season > 0:
+        if get_all_seasons:
+            while curr_season > 0: 
+                self.populate_url_queue(curr_season)
+                self.url_queue.join()
+                curr_season -= 1
+        else:
+            print("Getting single season: {}".format(starting_season))
             self.populate_url_queue(curr_season)
             self.url_queue.join()
-            curr_season -= 1
+
         self.finished()
 
 
