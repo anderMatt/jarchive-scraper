@@ -28,7 +28,6 @@ class Database:
 
 
 
-
 class MongoDatabase:
     def __init__(self, host_uri):
         self.host_uri = host_uri
@@ -59,15 +58,16 @@ class SqliteDatabase:
     def __init__(self, db_path):
         self.db_path = db_path
         self.conn = None
-        self.cursor = None
+
+        #TODO: define sql strings here.
 
     def init_connection(self):
         if not self._file_exists(self.db_path):
             print("Creating new file: {}".format(self.db_path))
             open(self.db_path, 'w').close() # Create file.
-        #try/except
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        # self.cursor = self.conn.cursor()
+
+        # TODO: try/except for connection.
+        self.conn = sqlite3.connect(self.db_path)
         self._build_tables()
 
     def save(self, categories_dict):
@@ -76,10 +76,10 @@ class SqliteDatabase:
             cursor.execute("""INSERT INTO categories(title) VALUES (?)""", (category,))
             category_id = cursor.lastrowid
             for clue in clues:
-                cursor.execute("""INSERT INTO clues(question, answer, category) VALUES(?,?,?)""", (clue["question"], clue["answer"], category_id))
+                cursor.execute("""INSERT INTO clues(question, answer, category_id) VALUES(?,?,?)""", (clue["question"], clue["answer"], category_id))
 
             self.conn.commit()
-            print('DONE SAVING A CATEGORY!')
+        return
 
 
     def _file_exists(self, fpath):
@@ -87,14 +87,17 @@ class SqliteDatabase:
 
     def _build_tables(self):
         cursor = self.conn.cursor()
-        cursor.execute("""CREATE TABLE IF NOT EXISTS categories(id INT PRIMARY KEY, title TEXT NOT NULL)""")
+        cursor.execute("""CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY, title TEXT NOT NULL)""")
 
-        cursor.execute("""CREATE TABLE IF NOT EXISTS clues(id INT PRIMARY KEY,
+        cursor.execute("""CREATE TABLE IF NOT EXISTS clues(id INTEGER PRIMARY KEY,
                     question TEXT NOT NULL,
                     answer TEXT NOT NULL,
-                    category INT NOT NULL,
-                    FOREIGN KEY(category) REFERENCES categories(id)
+                    category_id INT NOT NULL,
+                    FOREIGN KEY(category_id) REFERENCES categories(id)
                 )""")
+        self.conn.commit()
+        cursor.close()
+
         return
 
 

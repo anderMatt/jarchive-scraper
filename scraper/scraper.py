@@ -30,14 +30,19 @@ class JArchiveScraper:
     def __init__(self, database):
         self.database = database
         self.url_queue = queue.Queue()
+        self.db_queue = queue.Queue()
         self.workers = []
 
     def init_workers(self):
-        for i in range(MAX_THREADS):
-            w = ScraperWorker(self.url_queue, self.database)
+        for i in range(MAX_THREADS-1):
+            w = ScraperWorker(self.url_queue, self.db_queue)
             w.daemon = True
             self.workers.append(w)
             w.start()
+
+        db_worker = DBWorker(self.db_queue, self.database)
+        db_worker.daemon = True
+        db_worker.start()
 
     def start(self, season=None):
         """Entry point for scraping j-archive.
@@ -80,13 +85,16 @@ class JArchiveScraper:
         curr_season = starting_season
         if get_all_seasons:
             while curr_season > 0: 
+                print('GETTING SEASON: {}'.format(curr_season))
                 self.populate_url_queue(curr_season)
                 self.url_queue.join()
+                self.db_queue.join()
                 curr_season -= 1
         else:
             print("Getting single season: {}".format(starting_season))
             self.populate_url_queue(curr_season)
             self.url_queue.join()
+            self.db_queue.join()
 
         self.finished()
 
@@ -103,37 +111,52 @@ class ScraperWorker(threading.Thread):
     Thread that requests a j-archive webpage, passes a bs4.BeautifulSoup object of the page to the parsing
     functions, and passes the game data to the database interface for saving.
     """
-    def __init__(self, url_queue, database):  # TODO: pass third param: threading.Event() for graceful termination.
+    def __init__(self, url_queue, out_queue):  # TODO: pass third param: threading.Event() for graceful termination.
         threading.Thread.__init__(self)
-        self.queue = url_queue
-        self.database = database
+        self.url_queue = url_queue
+        self.out_queue = out_queue
+        # TODO: single flag shared with DB/workers, for err?
 
     def run(self):
         while True:
-            game_url = self.queue.get()
-            self.scrape_jarchive_page(game_url)
+            game_url = self.url_queue.get()
+            categories_and_clues = self.scrape_jarchive_page(game_url)
+            if categories_and_clues:
+                self.out_queue.put(categories_and_clues)
+            self.done()
 
     def scrape_jarchive_page(self, url):
         print('Scraping game at {}'.format(url))
         game_page_soup = get_page_soup(url)
         if not game_page_soup:
-            self.done()
-            return
+            return None
         categories_and_clues = parse_jarchive_page(game_page_soup)  # Dict of ALL cat:clues on the page.
-        if not categories_and_clues:
-            self.done()
-            return
-        self.save(categories_and_clues)
-        self.done()
-
-    def save(self, game_category_dict):  # Dict of {title:'', clues: [(v,q,a),...]}
-        self.database.save(game_category_dict)
+        return categories_and_clues
 
     def done(self):
-        self.queue.task_done()
+        self.url_queue.task_done()
 
     def on_page_request_error(self):
         return
+
+
+class DBWorker(threading.Thread):
+
+    def __init__(self, data_queue, database):
+        threading.Thread.__init__(self)
+        self.data_queue = data_queue
+        self.database = database
+
+    def run(self):
+        #  TODO: init connection here.
+        self.database.init_connection()
+        while True:
+            data = self.data_queue.get()
+            self.database.save(data)
+            self.data_queue.task_done()
+
+    def onerror(self):
+        pass
 
 
 ### Helpers ###
