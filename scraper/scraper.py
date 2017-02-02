@@ -13,6 +13,7 @@ from .parser import parse_jarchive_page
 
 JARCHIVE_BASE_URL = "http://j-archive.com"
 MAX_THREADS = 8
+URL_SENTINEL = "FINISHED"
 
 class JArchiveScraper:
     """
@@ -25,41 +26,67 @@ class JArchiveScraper:
     Attributes:
         url_queue (queue.Queue): Shared among worker threads and populated with j-archive page urls that
             are queued to be scraped.
+
+        game_data_queue (queue.Queue): Populated with game data dicts created by ScraperWorker threads, for entry into database.
+
         workers [ScraperWorker]: List of references to worker threads.
+
+        url_worker (threading.Thread): Responsible for populating the url_queue for ScraperWorkers threads to consume.
     """
+
     def __init__(self, database):
         self.database = database
         self.url_queue = queue.Queue()
-        self.db_queue = queue.Queue()
+        self.game_data_queue = queue.Queue()
+
+        self.url_worker = None;  # TODO: more than one?
         self.workers = []
+
+        self.finished = False
 
     def init_workers(self):
         for i in range(MAX_THREADS-1):
-            w = ScraperWorker(self.url_queue, self.db_queue)
+            w = ScraperWorker(self.url_queue, self.game_data_queue)
             w.daemon = True
             self.workers.append(w)
             w.start()
 
-        db_worker = DBWorker(self.db_queue, self.database)
-        db_worker.daemon = True
-        db_worker.start()
+        self.url_worker = UrlWorker(self.url_queue)
+        self.url_worker.daemon = True
+        self.url_worker.start()
+
 
     def start(self, season=None):
         """Entry point for scraping j-archive.
         Args:
             season: Season to start scraping games from. Defaults to the current season.
         """
-        if season is None:
-            get_all_seasons = True
-            season = get_current_season_number()  # TODO: unable.
-            print("Scraping all seasons, starting at current season: {}".format(season))
-        else:
-            get_all_seasons = False
         self.init_workers()
-        season = int(season)
-        self.mainloop(season, get_all_seasons = get_all_seasons)
+        self.database.init_connection()  # TODO: "wait" for connection response.
+        # connection_success = self._wait_for_db_connection()
+        if not connection_success:
+            print("DB CONNECTION ERROR: <put error here>")
+            sys.exit(1)
+        
+        print("DB successfully connected! Startin scraper mainloop.")
+        self.mainloop()
 
-    def finished(self):
+    def _wait_for_db_connection(self):
+        for attempt in range (30):
+            connection_status = self.database.get_connection_status()  #TODO: get err message, to return.
+            if connection_status == DB.WAITING:
+                sleep(1)
+                continue
+
+            elif connection_status == DB.SUCCESS:
+                return True
+
+            elif connection_status == DB.FAILURE:
+                return False
+
+        return False  # Attempt timeout.
+
+    def on_finished(self):
         print("Finished scraping JArchive")
         return
     
@@ -71,32 +98,32 @@ class JArchiveScraper:
         self.exit(error = False)
         return
     
-    def populate_url_queue(self, season):
-        """Populate url queue with game urls for given season."""
-        game_urls = get_season_game_urls(season)
-        if not game_urls:
-            print("Unable to get game urls for season {}".format(season))
-            self.on_url_queue_fail()
-        for url in game_urls:
-            self.url_queue.put(url)
-        return game_urls
 
-    def mainloop(self, starting_season, get_all_seasons):
-        curr_season = starting_season
-        if get_all_seasons:
-            while curr_season > 0: 
-                print('GETTING SEASON: {}'.format(curr_season))
-                self.populate_url_queue(curr_season)
-                self.url_queue.join()
-                self.db_queue.join()
-                curr_season -= 1
+    def mainloop(self):
+        while not self.finished:
+            try:
+                data = self.game_data_queue.get(timeout=1)
+            except queue.Empty:
+                self._handle_empty_data_queue()
+                continue
+            try:
+                self.database.save(data)
+            except Exception as e:
+                self._handle_database_exception(e)  # TODO: implement this method!
+
+        self.on_finished()
+
+
+
+    def _handle_empty_data_queue(self):
+        if(threading.active_count() > 1): 
+            return  # No data in queue right now, but workers are still working. Data will come eventually.
         else:
-            print("Getting single season: {}".format(starting_season))
-            self.populate_url_queue(curr_season)
-            self.url_queue.join()
-            self.db_queue.join()
-
-        self.finished()
+            self.finished = True
+            # No more workers are processing data. Once data queue is empty, we're finished.
+    
+    def _handle_database_exception(e):
+        print("Inside handle DB exception: {}".format(e))
 
     def exit(self, error=False):
         if error:
@@ -111,15 +138,18 @@ class ScraperWorker(threading.Thread):
     Thread that requests a j-archive webpage, passes a bs4.BeautifulSoup object of the page to the parsing
     functions, and passes the game data to the database interface for saving.
     """
-    def __init__(self, url_queue, out_queue):  # TODO: pass third param: threading.Event() for graceful termination.
+    def __init__(self, url_queue, out_queue): 
         threading.Thread.__init__(self)
         self.url_queue = url_queue
         self.out_queue = out_queue
-        # TODO: single flag shared with DB/workers, for err?
 
     def run(self):
         while True:
             game_url = self.url_queue.get()
+            if game_url == URL_SENTINEL:  # No more urls are coming
+                self.url_queue.put(URL_SENTINEL)  # For next worker to get
+                return
+
             categories_and_clues = self.scrape_jarchive_page(game_url)
             if categories_and_clues:
                 self.out_queue.put(categories_and_clues)
@@ -140,23 +170,40 @@ class ScraperWorker(threading.Thread):
         return
 
 
-class DBWorker(threading.Thread):
+class UrlWorker(threading.Thread):  # Responsible for populating game urls for the workers to process.
 
-    def __init__(self, data_queue, database):
+    def __init__(self, url_queue):
         threading.Thread.__init__(self)
-        self.data_queue = data_queue
-        self.database = database
+        self.url_queue = url_queue
+        self.urls_exhausted = False
 
-    def run(self):
-        #  TODO: init connection here.
-        self.database.init_connection()
-        while True:
-            data = self.data_queue.get()
-            self.database.save(data)
-            self.data_queue.task_done()
+    def start(self, starting_season = None):
+        if starting_season is None:
+            curr_season = get_current_season_number()  # TODO: class method. 
+            while (curr_season > 0) and not self.urls_exhausted:
+                self.populate_url_queue(curr_season)
+                curr_season -= 1
+        else:  # Only a single season
+            self.populate_url_queue(curr_season)
+            self.finished()
 
-    def onerror(self):
-        pass
+    
+    def populate_url_queue(self, season):
+        """Populate url queue with game urls for workers to process.
+        
+        Sets "finished" flag to True if no more game urls are found.
+        """
+        game_urls = get_season_game_urls(season)  # TODO: class method
+        if not game_urls:
+            print("Unable to get game urls for season {}".format(season))
+            self.finished()
+
+        for url in game_urls:
+            self.url_queue.put(url)
+
+    def finished(self):
+        self.url_queue.put(URL_SENTINEL)
+        self.finished = True
 
 
 ### Helpers ###
@@ -185,7 +232,7 @@ def get_current_season_number():
     except (AttributeError, KeyError) as err:  # An href was not found, or it did not link to a season page.
         print("Error getting current season number from the JArchive homepage: {}".format(err))
         return
-    return season_number
+    return int(season_number)
 
 
 def get_season_game_urls(season):
