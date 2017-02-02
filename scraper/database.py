@@ -2,6 +2,7 @@
 import os
 import pymongo
 import sqlite3
+from .database_status_codes import DATABASE_STATUS_CODES
 
 class DatabaseConnectionError(Exception):
      """Raise when DB is unable to connect to database resource."""
@@ -34,14 +35,21 @@ class MongoDatabase:
         self.collection_name = "categories"
         self.client = None
         self.db = None
+        self.db_status = DATABASE_STATUS_CODES["not connected"]
 
     def init_connection(self):
+        print("Attempting to connect to {}".format(self.host_uri))
         self.client = pymongo.MongoClient(self.host_uri)
+
         try:
             self.client.server_info()  # Check conn was successful. Polls for <serverSelectionTimeoutMS passed to client constructor, default=30s>
         except pymongo.errors.ServerSelectionTimeoutError as e:
+            self.db_status = DATABASE_STATUS_CODES["failure"]
             raise DatabaseConnectionError("Timed out trying to connect to Mongo server at . Please ensure an instance of mongod is running".format(self.host_uri)) from e
+
+        self.db_status = DATABASE_STATUS_CODES["success"]
         self.db = self.client.get_default_database()  # Database specified in host_uri.
+        print("Connection successful. Category collections will be saved to {}".format(self.db.name))
 
 
     def save(self, categories_dict):
@@ -52,23 +60,31 @@ class MongoDatabase:
                 })
         return
 
+    def get_connection_status(self):
+        return self.db_status
+
 
 class SqliteDatabase:
 
     def __init__(self, db_path):
         self.db_path = db_path
         self.conn = None
+        self.db_status = DATABASE_STATUS_CODES["not connected"]
 
         #TODO: define sql strings here.
 
     def init_connection(self):
+        print("Attempting to connect to {}".format(self.db_path))
         if not self._file_exists(self.db_path):
             print("Creating new file: {}".format(self.db_path))
             open(self.db_path, 'w').close() # Create file.
 
-        # TODO: try/except for connection.
-        self.conn = sqlite3.connect(self.db_path)
-        self._build_tables()
+        try:
+            self.conn = sqlite3.connect(self.db_path)
+            self._build_tables()
+            self.db_status = DATABASE_STATUS_CODES["success"]
+        except Exception as e:
+            self.db_status = DATABASE_STATUS_CODES["failure"]
 
     def save(self, categories_dict):
         cursor = self.conn.cursor()
@@ -98,7 +114,9 @@ class SqliteDatabase:
         self.conn.commit()
         cursor.close()
 
-        return
+    def get_connection_status(self):
+        return self.db_status
+
 
 
 if __name__ == "__main__":

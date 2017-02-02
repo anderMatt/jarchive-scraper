@@ -1,19 +1,60 @@
+import bs4
 import re
+import requests
 from .exceptions import MalformedRoundHTMLError, IncompleteClueError
 
 """This module contains functions to parse clue answers and question from j-archive HTML.
 """
 
-
+JARCHIVE_BASE_URL = "http://j-archive.com"
 CLUE_ANSWER_REGEX = re.compile(r'''<em class="correct_response">(.+)</em>''')
+
 """
 Clue answers on j-archive are not the string content of an HTML element (like questions are), but instead are part of a string that
 inline JavaScript writes to the document when a user hovers over a clue box. Regex is used to parse the answer from this string.
 Instead of recompiling the regex with every call to _parse_clue_answer, we initialize it here as a global variable.
 """
 
-def _remove_html_tags(string):
-    return re.sub(r'''(<.*?>|\\)''', '', string)
+def get_page_soup(url):
+    """Returns bs4.BeautifulSoup object of page at url."""
+
+    try:
+        req = requests.get(url)
+        req.raise_for_status()
+    except requests.exceptions.RequestException as err:
+        print('Error getting page soup for <{}>: {}'.format(url, err))
+        return None
+        # return  # TODO: raise?
+    page_soup = bs4.BeautifulSoup(req.text, "html.parser")
+    return page_soup
+
+
+def get_current_season_number():
+    """Return season number of the current Jeopardy season on j-archive."""
+
+    homepage_soup = get_page_soup(JARCHIVE_BASE_URL)  # TODO: unable to get homepage.
+    try:
+        current_season_href = homepage_soup.find("table", class_="fullpageheight").find("a")["href"]  # First href of homepage's content links to the current season.
+        season_number = re.search(r'''showseason.php\?season=(\d{1,2})''', current_season_href).group(1)
+    except (AttributeError, KeyError) as err:  # An href was not found, or it did not link to a season page.
+        print("Error getting current season number from the JArchive homepage: {}".format(err))
+        return
+    return int(season_number)
+
+
+def get_season_game_urls(season):
+    """Returns list of urls for every game of the given season.
+    
+    For every season, j-archive maintains a season page with links to every game of that season.
+    """
+    season_url = "{}/showseason.php?season={}".format(JARCHIVE_BASE_URL, season)
+    season_page_soup = get_page_soup(season_url)
+    if not season_page_soup:
+        print("Unable to get game urls for season {}".format(season))
+    game_hrefs = [td.find('a') for td in season_page_soup.find_all("td", {"align":"left", "valign":"top", "style":"width:140px"})]
+    game_urls = [a["href"] for a in game_hrefs]
+    return game_urls
+
 
 
 def parse_jarchive_page(page_soup):
@@ -34,6 +75,11 @@ def parse_jarchive_page(page_soup):
         except MalformedRoundHTMLError:
             continue
     return all_categories_and_clues
+
+
+def _remove_html_tags(string):
+    return re.sub(r'''(<.*?>|\\)''', '', string)
+
 
 def _parse_clue_question(clue_node):
     question_node = clue_node.find("td", class_="clue_text")

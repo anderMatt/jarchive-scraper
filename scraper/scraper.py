@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-import bs4
 import queue
-import re
-import requests
 import sys
 import threading
 import queue
 from functools import wraps
+from time import sleep
 from .exceptions import MalformedRoundHTMLError, IncompleteClueError
-from .parser import parse_jarchive_page
+from .parser import get_page_soup, parse_jarchive_page, get_current_season_number, get_season_game_urls
+from .database_status_codes import DATABASE_STATUS_CODES
 
 
-JARCHIVE_BASE_URL = "http://j-archive.com"
 MAX_THREADS = 8
 URL_SENTINEL = "FINISHED"
 
@@ -53,7 +51,7 @@ class JArchiveScraper:
 
         self.url_worker = UrlWorker(self.url_queue)
         self.url_worker.daemon = True
-        self.url_worker.start()
+        # self.url_worker.start()
 
 
     def start(self, season=None):
@@ -63,25 +61,26 @@ class JArchiveScraper:
         """
         self.init_workers()
         self.database.init_connection()  # TODO: "wait" for connection response.
-        # connection_success = self._wait_for_db_connection()
+
+        connection_success = self._wait_for_db_connection()
         if not connection_success:
             print("DB CONNECTION ERROR: <put error here>")
             sys.exit(1)
         
-        print("DB successfully connected! Startin scraper mainloop.")
+        self.url_worker.start()
         self.mainloop()
 
     def _wait_for_db_connection(self):
-        for attempt in range (30):
+        for attempt in range(30):
             connection_status = self.database.get_connection_status()  #TODO: get err message, to return.
-            if connection_status == DB.WAITING:
+            if connection_status == DATABASE_STATUS_CODES["not connected"]:
                 sleep(1)
                 continue
 
-            elif connection_status == DB.SUCCESS:
+            elif connection_status == DATABASE_STATUS_CODES["success"]:
                 return True
 
-            elif connection_status == DB.FAILURE:
+            elif connection_status == DATABASE_STATUS_CODES["failure"]:
                 return False
 
         return False  # Attempt timeout.
@@ -177,7 +176,7 @@ class UrlWorker(threading.Thread):  # Responsible for populating game urls for t
         self.url_queue = url_queue
         self.urls_exhausted = False
 
-    def start(self, starting_season = None):
+    def run(self, starting_season = None):
         if starting_season is None:
             curr_season = get_current_season_number()  # TODO: class method. 
             while (curr_season > 0) and not self.urls_exhausted:
@@ -208,45 +207,45 @@ class UrlWorker(threading.Thread):  # Responsible for populating game urls for t
 
 ### Helpers ###
 
-def get_page_soup(url):
-    """Returns bs4.BeautifulSoup object of page at url."""
+# def get_page_soup(url):
+#     """Returns bs4.BeautifulSoup object of page at url."""
 
-    try:
-        req = requests.get(url)
-        req.raise_for_status()
-    except requests.exceptions.RequestException as err:
-        print('Error getting page soup for <{}>: {}'.format(url, err))
-        return None
-        # return  # TODO: raise?
-    page_soup = bs4.BeautifulSoup(req.text, "html.parser")
-    return page_soup
-
-
-def get_current_season_number():
-    """Return season number of the current Jeopardy season on j-archive."""
-
-    homepage_soup = get_page_soup(JARCHIVE_BASE_URL)  # TODO: unable to get homepage.
-    try:
-        current_season_href = homepage_soup.find("table", class_="fullpageheight").find("a")["href"]  # First href of homepage's content links to the current season.
-        season_number = re.search(r'''showseason.php\?season=(\d{1,2})''', current_season_href).group(1)
-    except (AttributeError, KeyError) as err:  # An href was not found, or it did not link to a season page.
-        print("Error getting current season number from the JArchive homepage: {}".format(err))
-        return
-    return int(season_number)
+#     try:
+#         req = requests.get(url)
+#         req.raise_for_status()
+#     except requests.exceptions.RequestException as err:
+#         print('Error getting page soup for <{}>: {}'.format(url, err))
+#         return None
+#         # return  # TODO: raise?
+#     page_soup = bs4.BeautifulSoup(req.text, "html.parser")
+#     return page_soup
 
 
-def get_season_game_urls(season):
-    """Returns list of urls for every game of the given season.
+# def get_current_season_number():
+#     """Return season number of the current Jeopardy season on j-archive."""
+
+#     homepage_soup = get_page_soup(JARCHIVE_BASE_URL)  # TODO: unable to get homepage.
+#     try:
+#         current_season_href = homepage_soup.find("table", class_="fullpageheight").find("a")["href"]  # First href of homepage's content links to the current season.
+#         season_number = re.search(r'''showseason.php\?season=(\d{1,2})''', current_season_href).group(1)
+#     except (AttributeError, KeyError) as err:  # An href was not found, or it did not link to a season page.
+#         print("Error getting current season number from the JArchive homepage: {}".format(err))
+#         return
+#     return int(season_number)
+
+
+# def get_season_game_urls(season):
+#     """Returns list of urls for every game of the given season.
     
-    For every season, j-archive maintains a season page with links to every game of that season.
-    """
-    season_url = "{}/showseason.php?season={}".format(JARCHIVE_BASE_URL, season)
-    season_page_soup = get_page_soup(season_url)
-    if not season_page_soup:
-        print("Unable to get game urls for season {}".format(season))
-    game_hrefs = [td.find('a') for td in season_page_soup.find_all("td", {"align":"left", "valign":"top", "style":"width:140px"})]
-    game_urls = [a["href"] for a in game_hrefs]
-    return game_urls
+#     For every season, j-archive maintains a season page with links to every game of that season.
+#     """
+#     season_url = "{}/showseason.php?season={}".format(JARCHIVE_BASE_URL, season)
+#     season_page_soup = get_page_soup(season_url)
+#     if not season_page_soup:
+#         print("Unable to get game urls for season {}".format(season))
+#     game_hrefs = [td.find('a') for td in season_page_soup.find_all("td", {"align":"left", "valign":"top", "style":"width:140px"})]
+#     game_urls = [a["href"] for a in game_hrefs]
+#     return game_urls
 
 
 

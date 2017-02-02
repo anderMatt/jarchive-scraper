@@ -16,7 +16,7 @@ def arg_positive_int(value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--season", type=arg_positive_int, nargs="?", help="Scrape a single season of games on j-archive.")
-    parser.add_argument("--db", type=str, nargs="?", help="Enter database connection param.", default="jtrivia.db" ) # default="mongodb://localhost:27017/jarchive"
+    parser.add_argument("--db", type=str, nargs="?", help="Enter database connection param.", default="mongodb://localhost:27017/THETEST" ) # default="mongodb://localhost:27017/jarchive"
     args = parser.parse_args()
 
     database = Database.factory(args.db)
