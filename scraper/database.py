@@ -32,6 +32,7 @@ class MongoDatabase:
         self.client = None
         self.db = None
         self.db_status = DATABASE_STATUS_CODES["not connected"]
+        self.category_count = 0
 
     def init_connection(self):
         print("Attempting to connect to {}".format(self.host_uri))
@@ -54,6 +55,8 @@ class MongoDatabase:
                     "category": category,
                     "clues": clues
                 })
+
+        self.category_count += 1
         return
 
     def get_connection_status(self):
@@ -70,6 +73,7 @@ class SqliteDatabase:
         self.db_path = db_path
         self.conn = None
         self.db_status = DATABASE_STATUS_CODES["not connected"]
+        self.category_count = 0
 
         #TODO: define sql strings here.
 
@@ -95,6 +99,8 @@ class SqliteDatabase:
                 cursor.execute("""INSERT INTO clues(question, answer, category_id) VALUES(?,?,?)""", (clue["question"], clue["answer"], category_id))
 
             self.conn.commit()
+            self.category_count += 1
+
         return
 
 

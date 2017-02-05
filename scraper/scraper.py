@@ -94,6 +94,7 @@ class JArchiveScraper:
 
     def on_finished(self):
         print("Finished scraping JArchive")
+        print("{:,} categories and {:,} clues were collected!".format(self.database.category_count, self.database.category_count * 5))
         return
     
     def onerror(self):  # What type of args?
@@ -185,13 +186,16 @@ class UrlWorker(threading.Thread):  # Responsible for populating game urls for t
     def run(self):
         if not self.starting_season:
             curr_season = get_current_season_number()  # TODO: class method. 
+            if not curr_season:  # Failure getting game urls. Unable to start scraping games.
+                print("Unable to retrieve current season game URLs!")
+                self.finished()
+
             while (curr_season > 0) and not self.urls_exhausted:
                 self.populate_url_queue(curr_season)
                 curr_season -= 1
 
         else:  # Only a single season
             self.populate_url_queue(self.starting_season)
-            print('URLWorker about to call self.finished()')
             self.finished()
 
     
@@ -209,8 +213,8 @@ class UrlWorker(threading.Thread):  # Responsible for populating game urls for t
             self.url_queue.put(url)
 
     def finished(self):
+        self.urls_exhaused = True
         self.url_queue.put(URL_SENTINEL)
-        self.finished = True
 
 
 ### Helpers ###
