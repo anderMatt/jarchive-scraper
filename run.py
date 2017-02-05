@@ -2,7 +2,7 @@
 
 import sys
 import argparse
-from scraper import JArchiveScraper, Database, DatabaseConnectionError
+from scraper import JArchiveScraper, Database 
 
 def arg_positive_int(value):
     if not value.isdigit():
@@ -20,11 +20,6 @@ def main():
     args = parser.parse_args()
 
     database = Database.factory(args.db)
-    # try:
-    #     database.init_connection()
-    # except DatabaseConnectionError as e:
-    #     print("Unable to initialize database connection. Aborting...")
-    #     sys.exit(1)
     scraper = JArchiveScraper(database)
     scraper.start(args.season)
 

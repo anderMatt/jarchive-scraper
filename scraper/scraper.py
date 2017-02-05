@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
+import atexit
 import queue
 import sys
 import threading
 import queue
 from functools import wraps
 from time import sleep
-from .exceptions import MalformedRoundHTMLError, IncompleteClueError
+from .exceptions import MalformedRoundHTMLError, IncompleteClueError, DatabaseOperationalError
 from .parser import get_page_soup, parse_jarchive_page, get_current_season_number, get_season_game_urls
 from .database_status_codes import DATABASE_STATUS_CODES
 
@@ -42,36 +43,42 @@ class JArchiveScraper:
 
         self.finished = False
 
+        atexit.register(self.cleanup)
+
     def init_workers(self):
         for i in range(MAX_THREADS-1):
             w = ScraperWorker(self.url_queue, self.game_data_queue)
             w.daemon = True
             self.workers.append(w)
+            w.name = "Worker Thread: {}".format(i)
             w.start()
 
-        self.url_worker = UrlWorker(self.url_queue)
+
+    def init_url_worker(self, starting_season):
+        self.url_worker = UrlWorker(self.url_queue, starting_season)
         self.url_worker.daemon = True
-        # self.url_worker.start()
+        self.url_worker.name = "URL Worker Thread"
+        self.url_worker.start()
 
 
-    def start(self, season=None):
+    def start(self, starting_season=None):
         """Entry point for scraping j-archive.
         Args:
             season: Season to start scraping games from. Defaults to the current season.
         """
-        self.init_workers()
-        self.database.init_connection()  # TODO: "wait" for connection response.
+        self.database.init_connection()
 
         connection_success = self._wait_for_db_connection()
         if not connection_success:
             print("DB CONNECTION ERROR: <put error here>")
-            sys.exit(1)
+            sys.exit(0)
         
-        self.url_worker.start()
+        self.init_workers()
+        self.init_url_worker(starting_season)
         self.mainloop()
 
     def _wait_for_db_connection(self):
-        for attempt in range(30):
+        for attempt in range(10):  # 10 second timeout window.
             connection_status = self.database.get_connection_status()  #TODO: get err message, to return.
             if connection_status == DATABASE_STATUS_CODES["not connected"]:
                 sleep(1)
@@ -92,11 +99,6 @@ class JArchiveScraper:
     def onerror(self):  # What type of args?
         pass
 
-    def on_url_queue_fail(self):
-        print("Scraper unable to find urls to any more games, exiting.")
-        self.exit(error = False)
-        return
-    
 
     def mainloop(self):
         while not self.finished:
@@ -107,7 +109,7 @@ class JArchiveScraper:
                 continue
             try:
                 self.database.save(data)
-            except Exception as e:
+            except DatabaseOperationalError as e:
                 self._handle_database_exception(e)  # TODO: implement this method!
 
         self.on_finished()
@@ -115,13 +117,13 @@ class JArchiveScraper:
 
 
     def _handle_empty_data_queue(self):
-        if(threading.active_count() > 1): 
+        if any(t.is_alive() for t in self.workers):
             return  # No data in queue right now, but workers are still working. Data will come eventually.
         else:
             self.finished = True
             # No more workers are processing data. Once data queue is empty, we're finished.
     
-    def _handle_database_exception(e):
+    def _handle_database_exception(self, e):
         print("Inside handle DB exception: {}".format(e))
 
     def exit(self, error=False):
@@ -130,6 +132,9 @@ class JArchiveScraper:
             #  TODO: stacktrace.
         else:
             sys.exit(0)
+
+    def cleanup(self):
+        self.database.cleanup()
 
 
 class ScraperWorker(threading.Thread):
@@ -171,19 +176,22 @@ class ScraperWorker(threading.Thread):
 
 class UrlWorker(threading.Thread):  # Responsible for populating game urls for the workers to process.
 
-    def __init__(self, url_queue):
+    def __init__(self, url_queue, starting_season=None):
         threading.Thread.__init__(self)
         self.url_queue = url_queue
         self.urls_exhausted = False
+        self.starting_season = starting_season
 
-    def run(self, starting_season = None):
-        if starting_season is None:
+    def run(self):
+        if not self.starting_season:
             curr_season = get_current_season_number()  # TODO: class method. 
             while (curr_season > 0) and not self.urls_exhausted:
                 self.populate_url_queue(curr_season)
                 curr_season -= 1
+
         else:  # Only a single season
-            self.populate_url_queue(curr_season)
+            self.populate_url_queue(self.starting_season)
+            print('URLWorker about to call self.finished()')
             self.finished()
 
     

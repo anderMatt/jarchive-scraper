@@ -1,3 +1,3 @@
 from .scraper import JArchiveScraper
-from .database import Database, DatabaseConnectionError
+from .database import Database
 

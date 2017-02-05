@@ -2,12 +2,8 @@
 import os
 import pymongo
 import sqlite3
+from .exceptions import DatabaseOperationalError
 from .database_status_codes import DATABASE_STATUS_CODES
-
-class DatabaseConnectionError(Exception):
-     """Raise when DB is unable to connect to database resource."""
-     pass
-
 
 class Database:
 
@@ -45,7 +41,7 @@ class MongoDatabase:
             self.client.server_info()  # Check conn was successful. Polls for <serverSelectionTimeoutMS passed to client constructor, default=30s>
         except pymongo.errors.ServerSelectionTimeoutError as e:
             self.db_status = DATABASE_STATUS_CODES["failure"]
-            raise DatabaseConnectionError("Timed out trying to connect to Mongo server at . Please ensure an instance of mongod is running".format(self.host_uri)) from e
+            raise DatabaseOperationalError("Timed out trying to connect to Mongo server at . Please ensure an instance of mongod is running".format(self.host_uri)) from e
 
         self.db_status = DATABASE_STATUS_CODES["success"]
         self.db = self.client.get_default_database()  # Database specified in host_uri.
@@ -62,6 +58,10 @@ class MongoDatabase:
 
     def get_connection_status(self):
         return self.db_status
+
+    def cleanup(self):
+        if self.client:
+            self.client.close()
 
 
 class SqliteDatabase:
@@ -116,6 +116,10 @@ class SqliteDatabase:
 
     def get_connection_status(self):
         return self.db_status
+
+    def cleanup(self):
+        if self.conn:
+            self.conn.close()
 
 
 

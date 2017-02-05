@@ -15,3 +15,7 @@ class IncompleteClueError(Exception):
     """
     pass
 
+class DatabaseOperationalError(Exception):
+     """Generic catchall to indicate a database problem. Raised from an error specific for the database currently in use."""
+     pass
+
