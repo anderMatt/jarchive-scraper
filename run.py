@@ -27,6 +27,13 @@ This module contains the CLI to begin scraping j-archive.com. Two options may be
 import sys
 import argparse
 from scraper import JArchiveScraper, Database 
+import logging
+
+def init_logging():
+    print('inittting logging')
+    logging.basicConfig(filename="jtrivialog.log", filemode="w", format="%(asctime)s - %(threadName)s - %(levelname)s - %(message)s", level=logging.DEBUG)
+    logging.getLogger("requests").setLevel(logging.WARNING)
+
 
 def arg_positive_int(value):
     """argparse helper to valid season number passed via command line.
@@ -45,7 +52,13 @@ def main():
     parser.add_argument("--season", type=arg_positive_int, nargs="?", help="Scrape a single season of games on j-archive.")
     parser.add_argument("--db", type=str, nargs="?", help="Enter database connection param.", default="mongodb://localhost:27017/THETEST" ) # default="mongodb://localhost:27017/jarchive"
     parser.add_argument("--singleSeason", help="Scrape only a single season.", action="store_true")
+    parser.add_argument("--debug", help="Activate debug logging", action="store_true")
     args = parser.parse_args()
+
+    if args.debug:
+        init_logging()
+    else:
+        logging.disable(logging.CRITICAL)
 
     database = Database.factory(args.db)
     scraper = JArchiveScraper(database, args.season, get_single_season=args.singleSeason)
