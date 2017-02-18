@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 import atexit
 import queue
+import re
+import requests
 import sys
 import threading
-import queue
-from functools import wraps
 from time import sleep
 from .exceptions import MalformedRoundHTMLError, IncompleteClueError, DatabaseOperationalError
-from .parser import get_page_soup, parse_jarchive_page, get_current_season_number, get_season_game_urls
+from .parser import get_page_soup, parse_jarchive_page #, get_season_game_urls
 from .database_status_codes import DATABASE_STATUS_CODES
 
+import logging
+from datetime import datetime
 
 MAX_THREADS = 8
 URL_SENTINEL = "FINISHED"
@@ -66,7 +68,6 @@ class JArchiveScraper:
         """
 
         self.database.init_connection()
-
         connection_success = self._wait_for_db_connection()
         if not connection_success:
             print("DB CONNECTION ERROR: <put error here>")
@@ -102,6 +103,7 @@ class JArchiveScraper:
 
 
     def mainloop(self):
+        startime = datetime.now()
         while not self.finished:
             try:
                 data = self.game_data_queue.get(timeout=1)
@@ -113,14 +115,17 @@ class JArchiveScraper:
             except DatabaseOperationalError as e:
                 self._handle_database_exception(e)  # TODO: implement this method!
 
+        finished_time = datetime.now() - startime
+        logging.info(finished_time)
+        logging.info("FINISHED scraping jarchive in scraper.mainloop")
         self.on_finished()
 
 
     def _handle_empty_data_queue(self):
-        print('Empty data queue. Active threads: ')
+        logging.info('Empty data queue. Active threads: ')
         for t in threading.enumerate():
-            print(t.name)
-        print('****************************************')
+            logging.info("\t{}".format(t.name))
+        logging.info('****************************************')
         if any(t.is_alive() for t in self.workers):
             return  # No data in queue right now, but workers are still working. Data will come eventually.
         else:
@@ -154,33 +159,50 @@ class ScraperWorker(threading.Thread):
     def run(self):
         while True:
             game_url = self.url_queue.get()
+            logging.info("Got this URL from queue: {}".format(game_url))
             if game_url == URL_SENTINEL:  # No more urls are coming
+                logging.info("Got URL sentinel. Returning")
+                self.url_queue.task_done()
                 self.url_queue.put(URL_SENTINEL)  # For next worker to get
                 return
 
             categories_and_clues = self.scrape_jarchive_page(game_url)
             if categories_and_clues:
+                logging.info("Putting categories and clues into out queue")
                 self.out_queue.put(categories_and_clues)
             else:
-                print("{} was unable to get categories_and_clues".format(self.name))
-            self.done()
+                logging.info("Categories and clues for {} was None".format(game_url))
+
+            self.url_queue.task_done()
 
     def scrape_jarchive_page(self, url):
         print('Scraping game at {}'.format(url))
-        game_page_soup = get_page_soup(url)
-        if not game_page_soup:
+        logging.info('Scraping game at {}'.format(url))
+        try:
+            game_page_soup = get_page_soup(url)
+        except requests.exceptions.RequestException as e:
+            logging.exception("Exception scraping JArchive page at {}".format(url))
             return None
-        categories_and_clues = parse_jarchive_page(game_page_soup)  # Dict of ALL cat:clues on the page.
-        return categories_and_clues
 
-    def done(self):
-        self.url_queue.task_done()
+        categories_and_clues = parse_jarchive_page(game_page_soup)
+        return categories_and_clues # Dict of ALL cat:clues on the page.
 
     def on_page_request_error(self):
         return
 
 
 class UrlWorker(threading.Thread):  # Responsible for populating game urls for the workers to process.
+    """
+    Responsible for providing scraper workers with j-archive game URLs to scrape data from.
+
+    Attributes:
+        
+        url_queue(queue.Queue): Populated with game URLs. Scraper workers pop a URL to collect data from.
+
+        urls_exhausted(boolean): Set to True when unable to populate url_queue with more game URLs. This may be because
+            of an error requesting the season page soup, an error parsing the game URLs from the season page soup, or
+            when there are not more remaining games on j-archive.
+    """
 
     def __init__(self, url_queue):
         threading.Thread.__init__(self)
@@ -189,13 +211,14 @@ class UrlWorker(threading.Thread):  # Responsible for populating game urls for t
 
         self.starting_season = None
         self.get_single_season = False
+        self.base_url = "http://j-archive.com"
 
     def start(self, starting_season, get_single_season):
-        self.starting_season = starting_season or get_current_season_number()
+        self.starting_season = starting_season or self.get_current_season_number()
         self.get_single_season = get_single_season
 
         if self.starting_season is None:
-            print("Unable to retrieve current season game URLs!")
+            logging.warning("Unable to retrieve starting season game URLs. Exiting!")
             self.finished()
 
         else:
@@ -206,28 +229,60 @@ class UrlWorker(threading.Thread):  # Responsible for populating game urls for t
         if self.get_single_season:
             self.populate_url_queue(self.starting_season)
             self.finished()
+
         else:
             curr_season = self.starting_season
             while (curr_season > 0) and not self.urls_exhausted:
+                logging.info("Getting URLs for season {}".format(curr_season))
                 self.populate_url_queue(curr_season)
                 curr_season -= 1
             self.finished()
 
+    def get_current_season_number(self):
+        try:
+            page_soup = get_page_soup(self.base_url)
+        except requests.exceptions.RequestException as e:
+            logging.exception("Exception getting current season number")
+            return None
+
+        try:
+            current_season_href = page_soup.find("table", class_="fullpageheight").find("a")["href"]
+            season_number = re.search(r'''showseason.php\?season=(\d{1,2})''', current_season_href).group(1)
+        except (AttributeError, KeyError) as e:
+            logging.info("Unable to parse current season page.")
+            return None
+
+        return int(season_number)
+    
+    def get_season_game_urls(self, season):
+        season_url = "{}/showseason.php?season={}".format(self.base_url, season)
+        try:
+            season_page_soup = get_page_soup(season_url)
+        except requests.exceptions.RequestException as e:
+            logging.exception("Exception getting season {} page soup".format(season))
+            return None
+        
+        game_hrefs = [td.find("a") for td in season_page_soup.find_all("td", {"align":"left", "valign":"top", "style":"width:140px"})]
+        game_urls = [a["href"] for a in game_hrefs]
+
+        return game_urls
     
     def populate_url_queue(self, season):
         """Populate url queue with game urls for workers to process.
         
         Sets "finished" flag to True if no more game urls are found.
         """
-        game_urls = get_season_game_urls(season)  # TODO: class method
+        game_urls = self.get_season_game_urls(season)  # TODO: class method
         if not game_urls:
-            print("Unable to get game urls for season {}".format(season))
+            logging.warning("Unable to get game urls for season {}. URLs exhausted, exiting.".format(season))
             self.finished()
+            return
 
         for url in game_urls:
             self.url_queue.put(url)
 
     def finished(self):
         self.urls_exhaused = True
+        logging.info("URLs are exhausted. Putting sentinel into URL queue")
         self.url_queue.put(URL_SENTINEL)
 
